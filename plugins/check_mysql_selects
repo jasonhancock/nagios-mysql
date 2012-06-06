@@ -1,0 +1,108 @@
+#!/usr/bin/perl
+
+# Copyright (c) 2012 Jason Hancock <jsnbyh@gmail.com>
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is furnished
+# to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+# This file is part of the nagios-mysql bundle that can be found
+# at https://github.com/jasonhancock/nagios-mysql
+#
+# This plugin reports on the various types of selects that mysql is performing 
+# as reported by the 'SHOW GLOBAL STATUS' command.
+
+use strict;
+use warnings;
+use Nagios::Plugin;
+use DBI;
+
+my $np = Nagios::Plugin->new(
+    usage     => "Usage: %s [-H|--host=<host> ] [ -t|--type=<type> ]",
+    shortname => 'MySQL Selects',
+);
+
+$np->add_arg(
+    spec     => 'host|H=s',
+    help     => '-H, --host=hostname or IP',
+    required => 1,
+);
+
+
+$np->add_arg(
+    spec    => 'port|P=s',
+    help    => '-P, --port=port',
+    default => 3306,
+);
+
+$np->add_arg(
+    spec     => 'user|u=s',
+    help     => '-u, --user=username',
+    required => 1,
+);
+
+$np->add_arg(
+    spec     => 'pass|p=s',
+    help     => '-p, --pass=password',
+    required => 1,
+);
+
+$np->getopts;
+
+my @keys = (
+    'full_join',
+    'full_range_join',
+    'range',
+    'range_check',
+    'scan'
+);
+
+my %interests = (
+    'Select_full_join'       => 'full_join',
+    'Select_full_range_join' => 'full_range_join',
+    'Select_range'           => 'range',
+    'Select_range_check'     => 'range_check',
+    'Select_scan'            => 'scan'
+);
+
+my %data;
+
+# Connect to the database
+my $ds = sprintf('DBI:mysql::%s:%d', $np->opts->host, $np->opts->port);
+my $dbh = DBI->connect($ds, $np->opts->user, $np->opts->pass, { PrintError => 0 }) or
+    $np->nagios_exit('UNKNOWN', 'Unable to connect to database');
+
+# Run the query
+my $qh = $dbh->prepare('SHOW GLOBAL STATUS LIKE \'Select_%\'') or
+    $np->nagios_exit('UNKNOWN', 'UNABLE to prepare query');
+$qh->execute();
+while(my ($name, $value) = $qh->fetchrow_array()) {
+    $data{$interests{$name}} = $value if defined($interests{$name});
+}
+
+$qh->finish();
+$dbh->disconnect();
+
+foreach my $key(@keys) {
+    $np->add_perfdata(
+        label => $key,
+        value => $data{$key},
+        uom   => undef,
+    );
+}
+
+$np->nagios_exit('OK', '');
